@@ -599,7 +599,7 @@ class Manager {
 		return $result;
 	}
 
-	public function removeShare($mountPoint): bool {
+	public function removeShare($mountPoint, bool $force = false): bool {
 		try {
 			$mountPointObj = $this->mountManager->find($mountPoint);
 		} catch (NotFoundException $e) {
@@ -617,7 +617,7 @@ class Manager {
 
 		try {
 			$getShare = $this->connection->prepare('
-				SELECT `remote`, `share_token`, `remote_id`, `share_type`, `id`
+				SELECT `remote`, `share_token`, `remote_id`, `share_type`, `id`, `parent`
 				FROM  `*PREFIX*share_external`
 				WHERE `mountpoint_hash` = ? AND `user` = ?');
 			$result = $getShare->execute([$hash, $this->uid]);
@@ -638,7 +638,22 @@ class Manager {
 				$deleteResult = $query->execute([(int)$share['id']]);
 				$deleteResult->closeCursor();
 			} elseif ($share !== false && (int)$share['share_type'] === IShare::TYPE_GROUP) {
-				$this->updateAccepted((int)$share['id'], false);
+				if ($force) {
+					$qb = $this->connection->getQueryBuilder();
+					// delete group share entry and matching sub-entries
+					$qb->delete('share_external')
+					->where(
+						$qb->expr()->orX(
+							$qb->expr()->eq('id', $qb->createParameter('share_parent_id')),
+							$qb->expr()->eq('parent', $qb->createParameter('share_parent_id'))
+						)
+					);
+
+					$qb->setParameter('share_parent_id', $share['parent']);
+					$qb->execute();
+				} else {
+					$this->updateAccepted((int)$share['id'], false);
+				}
 			}
 
 			$this->removeReShares($id);
